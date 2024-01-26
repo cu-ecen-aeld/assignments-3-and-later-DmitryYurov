@@ -53,22 +53,15 @@ echo "Removing the old writer utility and compiling as a native application"
 make clean
 make
 
-echo "$PWD"
-com=$(ls -l)
-echo "${com}"
 for i in $( seq 1 $NUMFILES)
 do
-	echo "Cycling... ${i}"
 	./writer "$WRITEDIR/${username}$i.txt" "$WRITESTR"
 done
 
 OUTPUTSTRING=$(./finder.sh "$WRITEDIR" "$WRITESTR")
 
-echo "removing temporary directories"
 # remove temporary directories
 rm -rf /tmp/aeld-data
-
-echo "removed temporary directories"
 
 set +e
 echo ${OUTPUTSTRING} | grep "${MATCHSTR}"
