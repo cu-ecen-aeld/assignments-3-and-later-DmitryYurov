@@ -1,5 +1,12 @@
 #include "systemcalls.h"
 
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <fcntl.h>
+#include <stdlib.h>
+#include <unistd.h>
+
 /**
  * @param cmd the command to execute with system()
  * @return true if the command in @param cmd was executed
@@ -16,8 +23,8 @@ bool do_system(const char *cmd)
  *   and return a boolean true if the system() call completed with success
  *   or false() if it returned a failure
 */
-
-    return true;
+    int rc = system(cmd);
+    return rc == 0;
 }
 
 /**
@@ -36,6 +43,7 @@ bool do_system(const char *cmd)
 
 bool do_exec(int count, ...)
 {
+    bool result = true;
     va_list args;
     va_start(args, count);
     char * command[count+1];
@@ -45,9 +53,6 @@ bool do_exec(int count, ...)
         command[i] = va_arg(args, char *);
     }
     command[count] = NULL;
-    // this line is to avoid a compile warning before your implementation is complete
-    // and may be removed
-    command[count] = command[count];
 
 /*
  * TODO:
@@ -58,10 +63,21 @@ bool do_exec(int count, ...)
  *   as second argument to the execv() command.
  *
 */
-
+    pid_t pid = fork();
+    if (pid < 0) result = false; // error
+    else if (pid == 0) { // in child process
+        int rc = execv(command[0], command);
+        exit(rc); // if we are here, execv failed
+    }
+    else {
+        int status;
+        int rc = waitpid(pid, &status, 0);
+        if (rc < 0 || status != 0) result = false; // error
+    }
+    
     va_end(args);
 
-    return true;
+    return result;
 }
 
 /**
@@ -71,6 +87,7 @@ bool do_exec(int count, ...)
 */
 bool do_exec_redirect(const char *outputfile, int count, ...)
 {
+    bool result = true;
     va_list args;
     va_start(args, count);
     char * command[count+1];
@@ -92,8 +109,26 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
  *   The rest of the behaviour is same as do_exec()
  *
 */
+    pid_t pid = fork();
+    int fd = open(outputfile, O_WRONLY|O_TRUNC|O_CREAT, 0644);
+    if (fd < 0) exit(fd);
+    switch (pid) {
+        case -1: result = false; // error
+        case 0: {// in child process
+            int rc = dup2(fd, 1);
+            if (rc < 0) exit(rc);
+            rc = execv(command[0], command);
+            exit(rc); // if we are here, execv failed
+        }
+        default: {
+            int status;
+            int rc = waitpid(pid, &status, 0);
+            if (rc < 0 || status != 0) result = false; // error
+        }
+    }
 
+    close(fd);
     va_end(args);
 
-    return true;
+    return result;
 }
