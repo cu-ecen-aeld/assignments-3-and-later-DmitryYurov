@@ -1,8 +1,10 @@
-writer: writer.c
-	$(CROSS_COMPILE)gcc -g -Wall -c -o writer.o writer.c
-	$(CROSS_COMPILE)gcc -g -Wall -I/ writer.o -o writer
+.PHONY: clean all writer
 
-.PHONY: clean
+writer: writer.c
+	$(CC) $(CFLAGS) -c -o writer.o writer.c
+	$(CC) $(CFLAGS) -I/ writer.o -o writer
+
+all: writer
 
 clean:
 	rm -f *.o writer *.elf *.map
