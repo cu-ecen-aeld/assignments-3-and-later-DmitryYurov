@@ -1,8 +1,8 @@
 .PHONY: clean all aesdsocket
 
 aesdsocket: aesdsocket.c
-	$(CC) $(CFLAGS) -c -o aesdsocket.o aesdsocket.c
-	$(CC) $(CFLAGS) -I/ aesdsocket.o -o aesdsocket
+	$(CC) $(CFLAGS) -Wall -Werror -c -o aesdsocket.o aesdsocket.c
+	$(CC) $(CFLAGS) -Wall -Werror -I/ aesdsocket.o -o aesdsocket
 
 default: aesdoscket
 
