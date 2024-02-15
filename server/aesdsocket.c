@@ -5,6 +5,8 @@
 #include <netdb.h>
 
 #include <errno.h>
+#include <signal.h>
+#include <stdbool.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -15,14 +17,30 @@
 
 #define SELF_PORT "9000"
 #define N_PEDNING_CONNECTIONS 10
-#define MAXDATASIZE 100 // max number of bytes we can get at once
+#define STORAGE_FILE "/var/tmp/aesdsocketdata"
+
+bool signal_caught = false;
+static void signal_handler(int signal) {
+    signal_caught = true;
+}
+
+int install_sighandlers() {
+    struct sigaction new_action;
+    memset(&new_action, 0, sizeof(struct sigaction));
+
+    new_action.sa_handler = signal_handler;
+    if (sigaction(SIGTERM, &new_action, NULL) != 0) return -1;
+    if (sigaction(SIGINT, &new_action, NULL) != 0) return -1;
+
+    return 0;
+}
 
 ssize_t exchange_cycle(int conn_fd, FILE* sink) {
     char input_buffer[256] = {0};
     char output_buffer[256] = {0};
     ssize_t bytes_recv, bytes_read;
 
-    while((bytes_recv = recv(conn_fd, input_buffer, sizeof(input_buffer) - 1, 0)) > 0) {
+    while((bytes_recv = recv(conn_fd, input_buffer, sizeof(input_buffer) - 1, 0)) > 0 && !signal_caught) {
         input_buffer[bytes_recv] = '\0';
         char* pos = strchr(input_buffer, '\n');
         if (!pos) { // packet not finished, continue receive cycle
@@ -81,6 +99,7 @@ int main(int argc, char** argv) {
     if (rc < 0) {
         perror("Couldn't bind the socket");
         freeaddrinfo(addr_info);
+        close(sock_fd);
         exit(-1);
     }
     freeaddrinfo(addr_info); // don't need addr_info anymore
@@ -88,19 +107,28 @@ int main(int argc, char** argv) {
     rc = listen(sock_fd, N_PEDNING_CONNECTIONS);
     if (rc < 0) {
         perror("Error by calling to listen");
+        close(sock_fd);
         exit(-1);
     }
     //<---------starting a socket for listening to incoming connections----------//
     
     //----------opening a file to store the socket messages--------------------->//
-    FILE* sink = fopen("/var/tmp/aesdsocketdata", "w+");
+    FILE* sink = fopen(STORAGE_FILE, "w+");
     if (!sink) {
         perror("Couldn't open /var/tmp/aesdsocketdata");
+        close(sock_fd);
         exit(-1);
     }
     //<---------opening a file to store the socket messages----------------------//
 
-    while(1) { // accepting connections in a loop
+    if (install_sighandlers() != 0) {
+        perror("Couldn't install signal handlers");
+        close(sock_fd);
+        exit(-1);
+    }
+
+    //----------data exchange loop---------------------------------------------->//
+    while(!signal_caught) { // accepting connections in a loop
         struct sockaddr_storage remote_info;
         socklen_t remote_info_size = sizeof remote_info;
         int conn_fd = accept(sock_fd, (struct sockaddr*)&remote_info, &remote_info_size);
@@ -114,7 +142,7 @@ int main(int argc, char** argv) {
         inet_ntop(remote_info.ss_family, get_in_addr((struct sockaddr *)&remote_info), client_ip, sizeof client_ip);
         syslog(LOG_INFO, "Accepted connection from %s", client_ip);
 
-        if (exchange_cycle(conn_fd, sink) == 0) { // remote has closed the connection
+        if (exchange_cycle(conn_fd, sink) >= 0) { // remote has closed the connection
             syslog(LOG_INFO, "Closed connection from %s", client_ip);
         }
         else { // an error occured
@@ -123,7 +151,16 @@ int main(int argc, char** argv) {
 
         close(conn_fd);
     }
+    //<---------data exchange loop-----------------------------------------------//
+
+    if (signal_caught) syslog(LOG_INFO, "Caught signal, exiting");
+
+    close(sock_fd);
     fclose(sink);
+
+    // deleting packet storage
+    if (remove(STORAGE_FILE) != 0)
+        perror("Couldn't delete storage file");
 
     exit(0);
 }
