@@ -15,12 +15,31 @@
 
 #define SELF_PORT "9000"
 #define N_PEDNING_CONNECTIONS 10
-#define MAXDATASIZE 100 // max number of bytes we can get at once 
+#define MAXDATASIZE 100 // max number of bytes we can get at once
 
-// if output_fd is zero, opens output stream and returns associated file descriptor
-// negative return value denotes an error
-int write_to_file(int output_fd, char buf[10], int buf_len) {
-    return 0;
+ssize_t exchange_cycle(int conn_fd, FILE* sink) {
+    char input_buffer[256] = {0};
+    char output_buffer[256] = {0};
+    ssize_t bytes_recv, bytes_read;
+
+    while((bytes_recv = recv(conn_fd, input_buffer, sizeof(input_buffer) - 1, 0)) > 0) {
+        input_buffer[bytes_recv] = '\0';
+        char* pos = strchr(input_buffer, '\n');
+        if (!pos) { // packet not finished, continue receive cycle
+            fwrite(input_buffer, 1, bytes_recv, sink);
+        } else {
+            fwrite(input_buffer, 1, pos - input_buffer + 1, sink); // writing till the newline
+            rewind(sink);
+            while ((bytes_read = fread(output_buffer, 1, sizeof(output_buffer), sink)) > 0)
+                send(conn_fd, output_buffer, bytes_read, 0);
+
+            ssize_t bytes_left = bytes_recv - (pos - input_buffer + 1);
+            printf("Bytes left = %zd\n", bytes_left);
+            if (bytes_left > 0) fwrite(pos + 1, 1, bytes_left, sink);
+        }
+    }
+
+    return bytes_recv;
 }
 
 // get sockaddr, IPv4 or IPv6:
@@ -64,7 +83,7 @@ int main(int argc, char** argv) {
         freeaddrinfo(addr_info);
         exit(-1);
     }
-    freeaddrinfo(addr_info);
+    freeaddrinfo(addr_info); // don't need addr_info anymore
 
     rc = listen(sock_fd, N_PEDNING_CONNECTIONS);
     if (rc < 0) {
@@ -73,6 +92,14 @@ int main(int argc, char** argv) {
     }
     //<---------starting a socket for listening to incoming connections----------//
     
+    //----------opening a file to store the socket messages--------------------->//
+    FILE* sink = fopen("/var/tmp/aesdsocketdata", "w+");
+    if (!sink) {
+        perror("Couldn't open /var/tmp/aesdsocketdata");
+        exit(-1);
+    }
+    //<---------opening a file to store the socket messages----------------------//
+
     while(1) { // accepting connections in a loop
         struct sockaddr_storage remote_info;
         socklen_t remote_info_size = sizeof remote_info;
@@ -87,28 +114,16 @@ int main(int argc, char** argv) {
         inet_ntop(remote_info.ss_family, get_in_addr((struct sockaddr *)&remote_info), client_ip, sizeof client_ip);
         syslog(LOG_INFO, "Accepted connection from %s", client_ip);
 
-        FILE* sink = fopen("/var/tmp/aesdsocketdata", "w+");
-        if (!sink) {
-            perror("Couldn't open /var/tmp/aesdsocketdata");
-            continue;
-        }
-
-        char buffer[256] = {0};
-        while((rc = recv(conn_fd, buffer, sizeof(buffer) - 1, 0)) > 0) {
-            buffer[rc] = '\0';
-            fwrite(buffer, 1, rc, sink);
-        }
-
-        if (rc == 0) { // remote has closed the connection
+        if (exchange_cycle(conn_fd, sink) == 0) { // remote has closed the connection
             syslog(LOG_INFO, "Closed connection from %s", client_ip);
         }
         else { // an error occured
-            perror("Error while receiving data");
+            perror("Error during data exchange");
         }
+
         close(conn_fd);
-        
-        fclose(sink);
     }
+    fclose(sink);
 
     exit(0);
 }
