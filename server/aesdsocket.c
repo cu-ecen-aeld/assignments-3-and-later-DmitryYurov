@@ -52,7 +52,6 @@ ssize_t exchange_cycle(int conn_fd, FILE* sink) {
                 send(conn_fd, output_buffer, bytes_read, 0);
 
             ssize_t bytes_left = bytes_recv - (pos - input_buffer + 1);
-            printf("Bytes left = %zd\n", bytes_left);
             if (bytes_left > 0) fwrite(pos + 1, 1, bytes_left, sink);
         }
     }
@@ -103,26 +102,49 @@ int main(int argc, char** argv) {
         exit(-1);
     }
     freeaddrinfo(addr_info); // don't need addr_info anymore
+    //<---------starting a socket for listening to incoming connections----------//
+
+    //----------creating a daemon----------------------------------------------->//
+    if (argc > 1 && strcmp(argv[1], "-d") == 0) {
+        rc = fork();
+        if (rc < 0) {
+            perror("Couldn't fork the process");
+            close(sock_fd);
+            exit(-1);
+        } else if (rc > 0) { // parent process
+            exit(0);
+        }
+
+        // child process
+		if(setsid() < 0) { // moving to a different session (disconnect from the terminal)
+            syslog(LOG_ERR, "Error by setting session id: %d (%s)", errno, strerror(errno));
+			exit(-1);
+		}
+        chdir("/");
+        close(STDIN_FILENO);
+	    close(STDOUT_FILENO);
+	    close(STDERR_FILENO);
+    }
+    //<---------creating a daemon------------------------------------------------//
 
     rc = listen(sock_fd, N_PEDNING_CONNECTIONS);
     if (rc < 0) {
-        perror("Error by calling to listen");
+        syslog(LOG_ERR, "Error by calling to listen: %d (%s)", errno, strerror(errno));
         close(sock_fd);
         exit(-1);
     }
-    //<---------starting a socket for listening to incoming connections----------//
     
     //----------opening a file to store the socket messages--------------------->//
     FILE* sink = fopen(STORAGE_FILE, "w+");
     if (!sink) {
-        perror("Couldn't open /var/tmp/aesdsocketdata");
+        syslog(LOG_ERR, "Couldn't open /var/tmp/aesdsocketdata: %d (%s)", errno, strerror(errno));
         close(sock_fd);
         exit(-1);
     }
     //<---------opening a file to store the socket messages----------------------//
 
     if (install_sighandlers() != 0) {
-        perror("Couldn't install signal handlers");
+        syslog(LOG_ERR, "Couldn't install signal handlers: %d (%s)", errno, strerror(errno));
         close(sock_fd);
         exit(-1);
     }
@@ -133,7 +155,7 @@ int main(int argc, char** argv) {
         socklen_t remote_info_size = sizeof remote_info;
         int conn_fd = accept(sock_fd, (struct sockaddr*)&remote_info, &remote_info_size);
         if (conn_fd < 0) {// invalid socket descriptor
-            perror("Couldn't accept a connection");
+            syslog(LOG_ERR, "Couldn't accept a connection: %d (%s)", errno, strerror(errno));
             continue;
         }
 
@@ -146,7 +168,7 @@ int main(int argc, char** argv) {
             syslog(LOG_INFO, "Closed connection from %s", client_ip);
         }
         else { // an error occured
-            perror("Error during data exchange");
+            syslog(LOG_ERR, "Error during data exchange: %d (%s)", errno, strerror(errno));
         }
 
         close(conn_fd);
@@ -158,9 +180,9 @@ int main(int argc, char** argv) {
     close(sock_fd);
     fclose(sink);
 
-    // deleting packet storage
+    // deleting data storage
     if (remove(STORAGE_FILE) != 0)
-        perror("Couldn't delete storage file");
+        syslog(LOG_ERR, "Couldn't delete storage file: %d (%s)", errno, strerror(errno));
 
     exit(0);
 }
