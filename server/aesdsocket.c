@@ -19,9 +19,9 @@
 #define N_PEDNING_CONNECTIONS 10
 #define STORAGE_FILE "/var/tmp/aesdsocketdata"
 
-bool signal_caught = false;
+volatile sig_atomic_t signal_caught = 0;
 static void signal_handler(int signal) {
-    signal_caught = true;
+    signal_caught += 1;
 }
 
 int install_sighandlers() {
@@ -40,7 +40,7 @@ ssize_t exchange_cycle(int conn_fd, FILE* sink) {
     char output_buffer[256] = {0};
     ssize_t bytes_recv, bytes_read;
 
-    while((bytes_recv = recv(conn_fd, input_buffer, sizeof(input_buffer) - 1, 0)) > 0 && !signal_caught) {
+    while(!signal_caught && (bytes_recv = recv(conn_fd, input_buffer, sizeof(input_buffer) - 1, 0)) > 0) {
         input_buffer[bytes_recv] = '\0';
         char* pos = strchr(input_buffer, '\n');
         if (!pos) { // packet not finished, continue receive cycle
