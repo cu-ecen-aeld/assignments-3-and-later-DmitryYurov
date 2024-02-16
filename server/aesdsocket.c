@@ -38,7 +38,8 @@ int install_sighandlers() {
 ssize_t exchange_cycle(int conn_fd, FILE* sink) {
     char input_buffer[256] = {0};
     char output_buffer[256] = {0};
-    ssize_t bytes_recv, bytes_read;
+    ssize_t bytes_recv = 0;
+    ssize_t bytes_read = 0;
 
     while(!signal_caught && (bytes_recv = recv(conn_fd, input_buffer, sizeof(input_buffer) - 1, 0)) > 0) {
         input_buffer[bytes_recv] = '\0';
