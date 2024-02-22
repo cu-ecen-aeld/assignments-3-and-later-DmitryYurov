@@ -10,9 +10,10 @@ ssize_t exchange_cycle(int conn_fd, FILE* sink, volatile sig_atomic_t* interrupt
     ssize_t bytes_recv = 0;
     ssize_t bytes_read = 0;
 
-    while((!interrupt_flag || !*interrupt_flag) &&
-          (bytes_recv = recv(conn_fd, input_buffer, sizeof(input_buffer) - 1, 0)) > 0
-        ) {
+    while(!interrupt_flag || !*interrupt_flag) {
+        bytes_recv = recv(conn_fd, input_buffer, sizeof(input_buffer) - 1, 0);
+        if (bytes_recv <= 0) break;
+
         input_buffer[bytes_recv] = '\0';
         char* pos = strchr(input_buffer, '\n');
         if (!pos) { // packet not finished, continue receive cycle
