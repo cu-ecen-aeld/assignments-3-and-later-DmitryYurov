@@ -5,6 +5,7 @@
 #include <netdb.h>
 
 #include <errno.h>
+#include <pthread.h>
 #include <signal.h>
 #include <stdbool.h>
 #include <stdlib.h>
@@ -14,6 +15,8 @@
 #include <unistd.h>
 
 #include <arpa/inet.h>
+
+#include "recv_send.h"
 
 #define SELF_PORT "9000"
 #define N_PEDNING_CONNECTIONS 10
@@ -33,31 +36,6 @@ int install_sighandlers() {
     if (sigaction(SIGINT, &new_action, NULL) != 0) return -1;
 
     return 0;
-}
-
-ssize_t exchange_cycle(int conn_fd, FILE* sink) {
-    char input_buffer[256] = {0};
-    char output_buffer[256] = {0};
-    ssize_t bytes_recv = 0;
-    ssize_t bytes_read = 0;
-
-    while(!signal_caught && (bytes_recv = recv(conn_fd, input_buffer, sizeof(input_buffer) - 1, 0)) > 0) {
-        input_buffer[bytes_recv] = '\0';
-        char* pos = strchr(input_buffer, '\n');
-        if (!pos) { // packet not finished, continue receive cycle
-            fwrite(input_buffer, 1, bytes_recv, sink);
-        } else {
-            fwrite(input_buffer, 1, pos - input_buffer + 1, sink); // writing till the newline
-            rewind(sink);
-            while ((bytes_read = fread(output_buffer, 1, sizeof(output_buffer), sink)) > 0)
-                send(conn_fd, output_buffer, bytes_read, 0);
-
-            ssize_t bytes_left = bytes_recv - (pos - input_buffer + 1);
-            if (bytes_left > 0) fwrite(pos + 1, 1, bytes_left, sink);
-        }
-    }
-
-    return bytes_recv;
 }
 
 // get sockaddr, IPv4 or IPv6:
@@ -165,7 +143,7 @@ int main(int argc, char** argv) {
         inet_ntop(remote_info.ss_family, get_in_addr((struct sockaddr *)&remote_info), client_ip, sizeof client_ip);
         syslog(LOG_INFO, "Accepted connection from %s", client_ip);
 
-        if (exchange_cycle(conn_fd, sink) >= 0) { // remote has closed the connection
+        if (exchange_cycle(conn_fd, sink, &signal_caught) >= 0) { // remote has closed the connection
             syslog(LOG_INFO, "Closed connection from %s", client_ip);
         }
         else { // an error occured
