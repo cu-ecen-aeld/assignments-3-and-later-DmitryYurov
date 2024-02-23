@@ -16,7 +16,7 @@
 
 #include <arpa/inet.h>
 
-#include "recv_send.h"
+#include "conn_threads.h"
 
 #define SELF_PORT "9000"
 #define N_PEDNING_CONNECTIONS 10
@@ -128,6 +128,14 @@ int main(int argc, char** argv) {
         exit(-1);
     }
 
+    //----------initialize threading-related primitives------------------------->//
+    head_t head;
+    init_thread_list(&head);
+    pthread_mutex_t th_mutex;
+    pthread_mutex_init(&th_mutex, NULL);
+    //<---------initialize threading-related primitives--------------------------//
+
+
     //----------data exchange loop---------------------------------------------->//
     while(!signal_caught) { // accepting connections in a loop
         struct sockaddr_storage remote_info;
@@ -143,21 +151,32 @@ int main(int argc, char** argv) {
         inet_ntop(remote_info.ss_family, get_in_addr((struct sockaddr *)&remote_info), client_ip, sizeof client_ip);
         syslog(LOG_INFO, "Accepted connection from %s", client_ip);
 
-        if (exchange_cycle(conn_fd, sink, &signal_caught) >= 0) { // remote has closed the connection
-            syslog(LOG_INFO, "Closed connection from %s", client_ip);
-        }
-        else { // an error occured
-            syslog(LOG_ERR, "Error during data exchange: %d (%s)", errno, strerror(errno));
+        com_data_t* com_data = create_com_data();
+        if (!com_data) {
+            syslog(LOG_ERR, "Failed to create communication data: %d (%s)", errno, strerror(errno));
+            close(conn_fd);
+            continue;
         }
 
-        close(conn_fd);
+        com_data->conn_fd = conn_fd;
+        com_data->interrupt_flag = &signal_caught;
+        com_data->sink = sink;
+        com_data->mutex = &th_mutex;
+        if (enqueue_thread(&head, com_data) != 0) {
+            syslog(LOG_ERR, "Failed to enqueue thread: %d (%s)", errno, strerror(errno));
+        }
+
+        remove_ready(&head, false);
     }
     //<---------data exchange loop-----------------------------------------------//
 
     if (signal_caught) syslog(LOG_INFO, "Caught signal, exiting");
 
+    remove_ready(&head, true);
+
     close(sock_fd);
     fclose(sink);
+    pthread_mutex_destroy(&th_mutex);
 
     // deleting data storage
     if (remove(STORAGE_FILE) != 0)
