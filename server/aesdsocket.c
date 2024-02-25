@@ -1,4 +1,6 @@
+#ifndef _POSIX_C_SOURCE
 #define _POSIX_C_SOURCE 200809L
+#endif
 
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -17,6 +19,7 @@
 #include <arpa/inet.h>
 
 #include "conn_threads.h"
+#include "timer_utils.h"
 
 #define SELF_PORT "9000"
 #define N_PEDNING_CONNECTIONS 10
@@ -135,6 +138,19 @@ int main(int argc, char** argv) {
     pthread_mutex_init(&th_mutex, NULL);
     //<---------initialize threading-related primitives--------------------------//
 
+    //----------initialize timer-related primitives----------------------------->//
+    timer_event_t timer_data;
+    timer_data.mutex = &th_mutex;
+    timer_data.sink = sink;
+    if (setup_timer(timer_data) != 0) {
+        syslog(LOG_ERR, "Error during setting up the timer. Exiting");
+        close(sock_fd);
+        fclose(sink);
+        pthread_mutex_destroy(&th_mutex);
+        exit(-1);
+    }
+    //<---------initialize timer-related primitives------------------------------//
+
 
     //----------data exchange loop---------------------------------------------->//
     while(!signal_caught) { // accepting connections in a loop
@@ -177,6 +193,7 @@ int main(int argc, char** argv) {
     close(sock_fd);
     fclose(sink);
     pthread_mutex_destroy(&th_mutex);
+    disarm_timer();
 
     // deleting data storage
     if (remove(STORAGE_FILE) != 0)
