@@ -53,7 +53,9 @@ void* get_in_addr(struct sockaddr *sa)
 
 
 int main(int argc, char** argv) {
-    int sock_fd, rc;
+    int sock_fd;
+    int rc = 0;
+    int exit_code = 0;
 
     //----------starting a socket for listening to incoming connections--------->//
     struct addrinfo hints;
@@ -66,22 +68,24 @@ int main(int argc, char** argv) {
     if (rc != 0) {
         fprintf(stderr, "Failure by composing address info: %s\n", gai_strerror(rc));
         freeaddrinfo(addr_info);
-        exit(-1);
+        exit_code = -1;
+        goto exit_label;
     }
 
     sock_fd = socket(addr_info->ai_family, addr_info->ai_socktype, addr_info->ai_protocol);
     if (sock_fd < 0) {
         perror("Couldn't create a socket");
         freeaddrinfo(addr_info);
-        exit(-1);
+        exit_code = -1;
+        goto exit_label;
     }
 
     rc = bind(sock_fd, addr_info->ai_addr, addr_info->ai_addrlen);
     if (rc < 0) {
         perror("Couldn't bind the socket");
-        freeaddrinfo(addr_info);
-        close(sock_fd);
-        exit(-1);
+        freeaddrinfo(addr_info); // calling freeaddrinfo before perror can cause a change in errno
+        exit_code = -1;
+        goto close_socket_label;
     }
     freeaddrinfo(addr_info); // don't need addr_info anymore
     //<---------starting a socket for listening to incoming connections----------//
@@ -91,16 +95,17 @@ int main(int argc, char** argv) {
         rc = fork();
         if (rc < 0) {
             perror("Couldn't fork the process");
-            close(sock_fd);
-            exit(-1);
+            exit_code = -1;
+            goto close_socket_label;
         } else if (rc > 0) { // parent process
-            exit(0);
+            goto exit_label;
         }
 
         // child process
 		if(setsid() < 0) { // moving to a different session (disconnect from the terminal)
             syslog(LOG_ERR, "Error by setting session id: %d (%s)", errno, strerror(errno));
-			exit(-1);
+			exit_code = -1;
+            goto close_socket_label;
 		}
         chdir("/");
         close(STDIN_FILENO);
@@ -112,30 +117,34 @@ int main(int argc, char** argv) {
     rc = listen(sock_fd, N_PEDNING_CONNECTIONS);
     if (rc < 0) {
         syslog(LOG_ERR, "Error by calling to listen: %d (%s)", errno, strerror(errno));
-        close(sock_fd);
-        exit(-1);
+        exit_code = -1;
+        goto close_socket_label;
     }
     
     //----------opening a file to store the socket messages--------------------->//
     FILE* sink = fopen(STORAGE_FILE, "w+");
     if (!sink) {
         syslog(LOG_ERR, "Couldn't open /var/tmp/aesdsocketdata: %d (%s)", errno, strerror(errno));
-        close(sock_fd);
-        exit(-1);
+        exit_code = -1;
+        goto close_socket_label;
     }
     //<---------opening a file to store the socket messages----------------------//
 
     if (install_sighandlers() != 0) {
         syslog(LOG_ERR, "Couldn't install signal handlers: %d (%s)", errno, strerror(errno));
-        close(sock_fd);
-        exit(-1);
+        exit_code = -1;
+        goto close_sink_label;
     }
 
     //----------initialize threading-related primitives------------------------->//
     head_t head;
     init_thread_list(&head);
     pthread_mutex_t th_mutex;
-    pthread_mutex_init(&th_mutex, NULL);
+    if (pthread_mutex_init(&th_mutex, NULL) != 0) {
+        syslog(LOG_ERR, "Couldn't initialize a pthread mutex: %d (%s)", errno, strerror(errno));
+        exit_code = -1;
+        goto close_sink_label;
+    }
     //<---------initialize threading-related primitives--------------------------//
 
     //----------initialize timer-related primitives----------------------------->//
@@ -144,10 +153,8 @@ int main(int argc, char** argv) {
     timer_data.sink = sink;
     if (setup_timer(timer_data) != 0) {
         syslog(LOG_ERR, "Error during setting up the timer. Exiting");
-        close(sock_fd);
-        fclose(sink);
-        pthread_mutex_destroy(&th_mutex);
-        exit(-1);
+        exit_code = -1;
+        goto destroy_mutex_label;
     }
     //<---------initialize timer-related primitives------------------------------//
 
@@ -179,7 +186,7 @@ int main(int argc, char** argv) {
         com_data->sink = sink;
         com_data->mutex = &th_mutex;
         if (enqueue_thread(&head, com_data) != 0) {
-            syslog(LOG_ERR, "Failed to enqueue thread: %d (%s)", errno, strerror(errno));
+            syslog(LOG_ERR, "Failed to enqueue thread");
         }
 
         remove_ready(&head, false);
@@ -190,14 +197,20 @@ int main(int argc, char** argv) {
 
     remove_ready(&head, true);
 
-    close(sock_fd);
-    fclose(sink);
-    pthread_mutex_destroy(&th_mutex);
+//destroy_timer_label:    
     disarm_timer();
 
-    // deleting data storage
-    if (remove(STORAGE_FILE) != 0)
-        syslog(LOG_ERR, "Couldn't delete storage file: %d (%s)", errno, strerror(errno));
+destroy_mutex_label:
+    pthread_mutex_destroy(&th_mutex);
 
-    exit(0);
+close_sink_label:
+    fclose(sink);
+    if (remove(STORAGE_FILE) != 0) // deleting data storage
+        syslog(LOG_ERR, "Couldn't delete storage file: %d (%s)", errno, strerror(errno));
+    
+close_socket_label:
+    close(sock_fd);
+
+exit_label:
+    exit(exit_code);
 }
