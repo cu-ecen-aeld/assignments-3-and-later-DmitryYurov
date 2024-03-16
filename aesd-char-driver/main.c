@@ -29,9 +29,6 @@ struct aesd_dev aesd_device;
 int aesd_open(struct inode *inode, struct file *filp)
 {
     PDEBUG("open");
-    /**
-     * TODO: handle open
-     */
 
     struct aesd_dev* dev = container_of(inode->i_cdev, struct aesd_dev, cdev);
     filp->private_data = dev;
@@ -41,9 +38,6 @@ int aesd_open(struct inode *inode, struct file *filp)
 int aesd_release(struct inode *inode, struct file *filp)
 {
     PDEBUG("release");
-    /**
-     * TODO: handle release
-     */
 
     filp->private_data = NULL;
     return 0;
@@ -107,13 +101,13 @@ int aesd_init_module(void)
     }
     memset(&aesd_device,0,sizeof(struct aesd_dev));
 
-    /**
-     * TODO: initialize the AESD specific portion of the device
-     */
+    aesd_circular_buffer_init(&aesd_device.circ_buf);
+    memset(&aesd_device.curr_entry, 0, sizeof(struct aesd_buffer_entry));
+    mutex_init(&aesd_device.mu);
 
     result = aesd_setup_cdev(&aesd_device);
-
     if( result ) {
+        mutex_destroy(&aesd_device.mu);
         unregister_chrdev_region(dev, 1);
     }
     return result;
@@ -126,9 +120,16 @@ void aesd_cleanup_module(void)
 
     cdev_del(&aesd_device.cdev);
 
-    /**
-     * TODO: cleanup AESD specific poritions here as necessary
-     */
+    while ((int rc = mutex_trylock(&aesd_device.mu)) != 1);
+    uint8_t entry_index;
+    struct aesd_buffer_entry* entry;
+    AESD_CIRCULAR_BUFFER_FOREACH(entry,&aesd_device.circ_buf,entry_index) {
+         if (entry->buffptr != NULL) kfree(entry->buffptr);
+    }
+    if (entry->buffptr != NULL) kfree(aesd_device.curr_entry.buffptr);
+    mutex_unlock(&aesd_device.mu)
+
+    mutex_destroy(&aesd_device.mu);
 
     unregister_chrdev_region(devno, 1);
 }
