@@ -17,7 +17,9 @@
 #include <linux/types.h>
 #include <linux/cdev.h>
 #include <linux/fs.h> // file_operations
+#include <linux/slab.h> // kmalloc
 #include "aesdchar.h"
+
 int aesd_major =   0; // use dynamic major
 int aesd_minor =   0;
 
@@ -57,13 +59,38 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
 ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
                 loff_t *f_pos)
 {
-    ssize_t retval = -ENOMEM;
     PDEBUG("write %zu bytes with offset %lld",count,*f_pos);
-    /**
-     * TODO: handle write
-     */
+
+    if (count == 0) return 0;
+    
+    struct aesd_dev* dev = container_of(filp->private_data, struct aesd_dev, cdev);
+    if (!dev) return 0;
+
+    ssize_t retval = mutex_lock_interruptible(&dev->mu);
+    if (retval != 0) return retval;
+
+    char* re_buf = kmalloc(dev->curr_entry.size + count, GFP_KERNEL);
+    if (!re_buf) return -ENOMEM;
+
+    memcpy(re_buf, dev->curr_entry.buffptr, dev->curr_entry.size);
+    retval = count - copy_from_user(re_buf + dev->curr_entry.size, buf, count);
+
+    const char* old_buf = dev->curr_entry.buffptr;
+    dev->curr_entry.buffptr = re_buf;
+    dev->curr_entry.size += retval;
+    if (old_buf) kfree(old_buf);
+
+    if (dev->curr_entry.buffptr[dev->curr_entry.size - 1] == '\n') {
+        old_buf = aesd_circular_buffer_add_entry(&dev->circ_buf, &dev->curr_entry);
+        if (old_buf) kfree(old_buf);
+        kfree(dev->curr_entry.buffptr);
+        memset(&dev->curr_entry, 0, sizeof(struct aesd_buffer_entry));
+    }
+
+    mutex_unlock(&dev->mu);
     return retval;
 }
+
 struct file_operations aesd_fops = {
     .owner =    THIS_MODULE,
     .read =     aesd_read,
@@ -119,15 +146,16 @@ void aesd_cleanup_module(void)
     dev_t devno = MKDEV(aesd_major, aesd_minor);
 
     cdev_del(&aesd_device.cdev);
-
-    while ((int rc = mutex_trylock(&aesd_device.mu)) != 1);
+    
+    int rc = 0;
+    while ((rc = mutex_trylock(&aesd_device.mu)) != 1);
     uint8_t entry_index;
     struct aesd_buffer_entry* entry;
     AESD_CIRCULAR_BUFFER_FOREACH(entry,&aesd_device.circ_buf,entry_index) {
          if (entry->buffptr != NULL) kfree(entry->buffptr);
     }
     if (entry->buffptr != NULL) kfree(aesd_device.curr_entry.buffptr);
-    mutex_unlock(&aesd_device.mu)
+    mutex_unlock(&aesd_device.mu);
 
     mutex_destroy(&aesd_device.mu);
 
