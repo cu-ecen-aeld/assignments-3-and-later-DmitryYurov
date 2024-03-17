@@ -83,7 +83,6 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
     if (dev->curr_entry.buffptr[dev->curr_entry.size - 1] == '\n') {
         old_buf = aesd_circular_buffer_add_entry(&dev->circ_buf, &dev->curr_entry);
         if (old_buf) kfree(old_buf);
-        kfree(dev->curr_entry.buffptr);
         memset(&dev->curr_entry, 0, sizeof(struct aesd_buffer_entry));
     }
 
