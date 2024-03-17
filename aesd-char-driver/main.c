@@ -68,7 +68,8 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
         mutex_unlock(&dev->mu);
         return -EFAULT;
     }
-    copy_to_user(buf, entry->buffptr, read_bytes);
+    unsigned long cnbc = copy_to_user(buf, entry->buffptr, read_bytes);
+    if (cnbc > 0) read_bytes -= cnbc;
 
     mutex_unlock(&dev->mu);
     return read_bytes;
