@@ -41,19 +41,37 @@ int aesd_release(struct inode *inode, struct file *filp)
 {
     PDEBUG("release");
 
-    filp->private_data = NULL;
+    // nothing to do here?
     return 0;
 }
 
 ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
                 loff_t *f_pos)
 {
-    ssize_t retval = 0;
     PDEBUG("read %zu bytes with offset %lld",count,*f_pos);
-    /**
-     * TODO: handle read
-     */
-    return retval;
+    
+    struct aesd_dev* dev = container_of(filp->private_data, struct aesd_dev, cdev);
+    if (!dev) return 0;
+
+    ssize_t retval = mutex_lock_interruptible(&dev->mu);
+    if (retval != 0) return -EINTR;
+
+    size_t offset;
+    struct aesd_buffer_entry* entry = aesd_circular_buffer_find_entry_offset_for_fpos(&dev->circ_buf, *f_pos, &offset);
+    if (!entry) {
+        mutex_unlock(&dev->mu);
+        return 0;
+    }
+    
+    ssize_t read_bytes = entry->size - offset;
+    if (read_bytes <= 0) {
+        mutex_unlock(&dev->mu);
+        return -EFAULT;
+    }
+    copy_to_user(buf, entry->buffptr, read_bytes);
+
+    mutex_unlock(&dev->mu);
+    return read_bytes;
 }
 
 ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
@@ -67,10 +85,13 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
     if (!dev) return 0;
 
     ssize_t retval = mutex_lock_interruptible(&dev->mu);
-    if (retval != 0) return retval;
+    if (retval != 0) return -EINTR;
 
     char* re_buf = kmalloc(dev->curr_entry.size + count, GFP_KERNEL);
-    if (!re_buf) return -ENOMEM;
+    if (!re_buf) {
+        mutex_unlock(&dev->mu);    
+        return -ENOMEM;
+    }
 
     memcpy(re_buf, dev->curr_entry.buffptr, dev->curr_entry.size);
     retval = count - copy_from_user(re_buf + dev->curr_entry.size, buf, count);
