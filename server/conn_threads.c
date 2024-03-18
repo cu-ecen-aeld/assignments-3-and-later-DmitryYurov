@@ -22,7 +22,7 @@ com_data_t* create_com_data() {
     result->interrupt_flag = NULL;
     result->mutex = NULL;
     result->result = 0;
-    result->sink = NULL;
+    result->sink_fd = 0;
 
     return result;
 }

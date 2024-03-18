@@ -1,9 +1,11 @@
 #include "recv_send.h"
 
 #include <sys/socket.h>
+#include <errno.h>
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
+#include <syslog.h>
 
 typedef struct InputData {
     void* data;
@@ -71,12 +73,27 @@ ssize_t exchange_cycle(com_data_t* com_data) {
 
             // blocking mutex for io synchronization
             if ((rc = pthread_mutex_lock(com_data->mutex)) != 0) goto finish;
-            fwrite(input_buffer.data, 1, n_bytes, com_data->sink); // writing till the newline
+            int left_to_write = n_bytes;
+            while (left_to_write > 0) {
+                ssize_t write_rc = write(com_data->sink_fd, input_buffer.data, left_to_write);
+                if (write_rc < 0) {
+                    syslog(LOG_ERR, "Write operation failed: %d (%s)", errno, strerror(errno));
+                    goto unlock_mutex;
+                }
+                left_to_write -= write_rc;
+            }
 
-            ssize_t bytes_read;
-            rewind(com_data->sink);
-            while ((bytes_read = fread(output_buffer, 1, sizeof(output_buffer), com_data->sink)) > 0)
+            ssize_t bytes_read = read(com_data->sink_fd, output_buffer, sizeof(output_buffer));
+            while (bytes_read != 0) {
+                if (bytes_read < 0) {
+                    syslog(LOG_ERR, "Read operation failed: %d (%s)", errno, strerror(errno));
+                    goto unlock_mutex;
+                }
                 send(com_data->conn_fd, output_buffer, bytes_read, 0);
+                bytes_read = read(com_data->sink_fd, output_buffer, sizeof(output_buffer));
+            }   
+
+unlock_mutex:
             pthread_mutex_unlock(com_data->mutex);
 
             if ((rc = recalc(&input_buffer, bytes_recv)) != 0) goto finish;
@@ -85,7 +102,7 @@ ssize_t exchange_cycle(com_data_t* com_data) {
         else if ((rc = recalc(&input_buffer, bytes_recv)) != 0) goto finish;
     }
 
-    finish:
+finish:
     free_input_data(&input_buffer);
     return rc;
 }
