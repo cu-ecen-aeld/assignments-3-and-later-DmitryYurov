@@ -83,6 +83,11 @@ ssize_t exchange_cycle(com_data_t* com_data) {
                 left_to_write -= write_rc;
             }
 
+            if (lseek(com_data->sink_fd, 0, SEEK_SET) < 0) {
+                syslog(LOG_ERR, "Seek operation failed: %d (%s)", errno, strerror(errno));
+                goto unlock_mutex;
+            }
+
             ssize_t bytes_read = read(com_data->sink_fd, output_buffer, sizeof(output_buffer));
             while (bytes_read != 0) {
                 if (bytes_read < 0) {

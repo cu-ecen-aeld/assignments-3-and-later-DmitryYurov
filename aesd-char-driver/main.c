@@ -120,12 +120,35 @@ finalize_write:
     return retval;
 }
 
+loff_t aesd_llseek(struct file* filp, loff_t offset, int whence)
+{
+    PDEBUG("Calling llseek");
+
+    struct aesd_dev* dev = filp->private_data;
+    if (mutex_lock_interruptible(&dev->mu)) {
+        printk(KERN_ERR "llseek: locking device interrupted");
+        return -EINTR;
+    }
+
+    loff_t buf_size = 0;
+    uint8_t entry_index;
+    struct aesd_buffer_entry* entry;
+    AESD_CIRCULAR_BUFFER_FOREACH(entry, &aesd_device.circ_buf, entry_index) {
+         if (entry->buffptr != NULL) buf_size += entry->size;
+    }
+    loff_t retval = fixed_size_llseek(filp, offset, whence, buf_size);
+
+    mutex_unlock(&dev->mu);
+    return retval;
+}
+
 struct file_operations aesd_fops = {
     .owner =    THIS_MODULE,
     .read =     aesd_read,
     .write =    aesd_write,
     .open =     aesd_open,
     .release =  aesd_release,
+    .llseek =   aesd_llseek,
 };
 
 static int aesd_setup_cdev(struct aesd_dev *dev)
@@ -177,7 +200,7 @@ void aesd_cleanup_module(void)
     cdev_del(&aesd_device.cdev);
     
     int rc = 0;
-    while ((rc = mutex_trylock(&aesd_device.mu)) != 1);
+    while ((rc = mutex_trylock(&aesd_device.mu)) != 1); // waiting for operations to finish (is it necessary?)
     uint8_t entry_index;
     struct aesd_buffer_entry* entry;
     AESD_CIRCULAR_BUFFER_FOREACH(entry,&aesd_device.circ_buf,entry_index) {
