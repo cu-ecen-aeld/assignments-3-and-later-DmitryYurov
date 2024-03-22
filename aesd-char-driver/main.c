@@ -18,7 +18,9 @@
 #include <linux/cdev.h>
 #include <linux/fs.h> // file_operations
 #include <linux/slab.h> // kmalloc
+
 #include "aesdchar.h"
+#include "aesd_ioctl.h"
 
 int aesd_major =   0; // use dynamic major
 int aesd_minor =   0;
@@ -142,6 +144,50 @@ loff_t aesd_llseek(struct file* filp, loff_t offset, int whence)
     return retval;
 }
 
+long aesd_ioctl(struct file* filp, unsigned int cmd, unsigned long data)
+{
+    if (cmd != AESDCHAR_IOCSEEKTO) return -ENOTTY;
+
+    PDEBUG("IOCTL command AESDCHAR_IOCSEEKTO received");
+
+    struct aesd_seekto seekto_data;
+    if(copy_from_user(&seekto_data, (const void*)data, sizeof(struct aesd_seekto)) > 0) {
+        printk("ioctl: failed to copy input argument from user space");
+        return -EFAULT;
+    }
+
+    struct aesd_dev* dev = filp->private_data;
+    if (mutex_lock_interruptible(&dev->mu)) {
+        printk("Couldn't lock device: interruption requested");
+        return -EINTR;
+    }
+
+    long retval = -EINVAL;
+    loff_t new_f_pos = 0;
+    loff_t n_items = dev->circ_buf.full
+        ? AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED
+        : dev->circ_buf.in_offs - dev->circ_buf.out_offs;
+    if (seekto_data.write_cmd >= n_items) goto ioctl_unlock_device;
+
+    int i;
+    for (i = 0; i < seekto_data.write_cmd; ++i) {
+        const loff_t pos = (dev->circ_buf.out_offs + i) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
+        new_f_pos += dev->circ_buf.entry[pos].size;
+    }
+    const loff_t pos = (dev->circ_buf.out_offs + i) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
+    if (dev->circ_buf.entry[pos].size <= seekto_data.write_cmd_offset) goto ioctl_unlock_device;
+
+    new_f_pos += seekto_data.write_cmd_offset;
+    retval = 0;
+
+ioctl_unlock_device:
+    mutex_unlock(&dev->mu);
+    if (retval) return retval;
+
+    filp->f_pos = new_f_pos;
+    return retval;
+}
+
 struct file_operations aesd_fops = {
     .owner =    THIS_MODULE,
     .read =     aesd_read,
@@ -149,6 +195,7 @@ struct file_operations aesd_fops = {
     .open =     aesd_open,
     .release =  aesd_release,
     .llseek =   aesd_llseek,
+    .unlocked_ioctl = aesd_ioctl,
 };
 
 static int aesd_setup_cdev(struct aesd_dev *dev)
