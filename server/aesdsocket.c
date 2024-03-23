@@ -8,7 +8,6 @@
 #include <netdb.h>
 
 #include <errno.h>
-#include <fcntl.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdbool.h>
@@ -20,19 +19,12 @@
 #include <arpa/inet.h>
 
 #include "conn_threads.h"
-#include "timer_utils.h"
 
 // uncomment the following line to enable redirection to the aesdchar device
 #define USE_AESD_CHAR_DEVICE 1
 
 #define SELF_PORT "9000"
 #define N_PEDNING_CONNECTIONS 10
-
-#ifndef USE_AESD_CHAR_DEVICE
-#define STORAGE_FILE "/var/tmp/aesdsocketdata"
-#else
-#define STORAGE_FILE "/dev/aesdchar"
-#endif
 
 volatile sig_atomic_t signal_caught = 0;
 static void signal_handler(int signal) {
@@ -129,20 +121,11 @@ int main(int argc, char** argv) {
         exit_code = -1;
         goto close_socket_label;
     }
-    
-    //----------opening a file / device to store the socket messages--------------------->//
-    int sink_fd = open(STORAGE_FILE, O_RDWR | O_CREAT, S_IRWXG | S_IRWXO | S_IRWXU);
-    if (sink_fd < 0) {
-        syslog(LOG_ERR, "Couldn't open %s: %d (%s)", STORAGE_FILE, errno, strerror(errno));
-        exit_code = -1;
-        goto close_socket_label;
-    }
-    //<---------opening a file / device to store the socket messages----------------------//
 
     if (install_sighandlers() != 0) {
         syslog(LOG_ERR, "Couldn't install signal handlers: %d (%s)", errno, strerror(errno));
         exit_code = -1;
-        goto close_sink_label;
+        goto close_socket_label;
     }
 
     //----------initialize threading-related primitives------------------------->//
@@ -152,22 +135,9 @@ int main(int argc, char** argv) {
     if (pthread_mutex_init(&th_mutex, NULL) != 0) {
         syslog(LOG_ERR, "Couldn't initialize a pthread mutex: %d (%s)", errno, strerror(errno));
         exit_code = -1;
-        goto close_sink_label;
+        goto close_socket_label;
     }
     //<---------initialize threading-related primitives--------------------------//
-
-    //----------initialize timer-related primitives----------------------------->//
-#ifndef USE_AESD_CHAR_DEVICE
-    timer_event_t timer_data;
-    timer_data.mutex = &th_mutex;
-    timer_data.sink = sink;
-    if (setup_timer(timer_data) != 0) {
-        syslog(LOG_ERR, "Error during setting up the timer. Exiting");
-        exit_code = -1;
-        goto destroy_mutex_label;
-    }
-#endif
-    //<---------initialize timer-related primitives------------------------------//
 
 
     //----------data exchange loop---------------------------------------------->//
@@ -194,7 +164,6 @@ int main(int argc, char** argv) {
 
         com_data->conn_fd = conn_fd;
         com_data->interrupt_flag = &signal_caught;
-        com_data->sink_fd = sink_fd;
         com_data->mutex = &th_mutex;
         if (enqueue_thread(&head, com_data) != 0) {
             syslog(LOG_ERR, "Failed to enqueue thread");
@@ -207,23 +176,7 @@ int main(int argc, char** argv) {
     if (signal_caught) syslog(LOG_INFO, "Caught signal, exiting");
 
     remove_ready(&head, true);
-
-#ifndef USE_AESD_CHAR_DEVICE  
-    disarm_timer();
-#endif
-
-#ifndef USE_AESD_CHAR_DEVICE
-destroy_mutex_label:
-#endif
     pthread_mutex_destroy(&th_mutex);
-
-close_sink_label:
-    if (close(sink_fd) != 0)
-        syslog(LOG_ERR, "Couldn't close storage file %s: %d (%s)", STORAGE_FILE, errno, strerror(errno));
-#ifndef USE_AESD_CHAR_DEVICE
-    if (remove(STORAGE_FILE) != 0) // deleting data storage
-        syslog(LOG_ERR, "Couldn't delete storage file: %d (%s)", errno, strerror(errno));
-#endif
     
 close_socket_label:
     close(sock_fd);

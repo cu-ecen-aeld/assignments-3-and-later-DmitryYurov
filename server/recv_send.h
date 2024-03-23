@@ -9,7 +9,6 @@
 
 typedef struct com_data_t {
     int conn_fd;
-    int sink_fd;
     pthread_mutex_t* mutex;
     volatile bool execution_finished;
     volatile sig_atomic_t* interrupt_flag;
